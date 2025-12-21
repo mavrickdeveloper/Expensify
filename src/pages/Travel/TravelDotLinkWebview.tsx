@@ -13,11 +13,13 @@ type TravelDotLinkWebviewProps = StackScreenProps<TravelNavigatorParamList, type
 
 function TravelDotLinkWebview({route}: TravelDotLinkWebviewProps) {
     const {translate} = useLocalize();
-    const {token, isTestAccount} = route.params;
+    const {token, isTestAccount, postLoginPath} = route.params;
     const webViewRef = useRef<WebView>(null);
     const styles = useThemeStyles();
 
-    const url = buildTravelDotURL(token, isTestAccount === 'true');
+    // Decode the postLoginPath if it was URL encoded during navigation
+    const decodedPostLoginPath = postLoginPath ? decodeURIComponent(postLoginPath) : undefined;
+    const url = buildTravelDotURL(token, isTestAccount === 'true', decodedPostLoginPath);
 
     return (
         <ScreenWrapper

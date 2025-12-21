@@ -2579,7 +2579,10 @@ const ROUTES = {
     },
     TRAVEL_DOT_LINK_WEB_VIEW: {
         route: 'travel-dot-link',
-        getRoute: (token: string, isTestAccount?: boolean) => `travel-dot-link?token=${token}&isTestAccount=${isTestAccount}` as const,
+        getRoute: (token: string, isTestAccount?: boolean, postLoginPath?: string) => {
+            const baseRoute = `travel-dot-link?token=${token}&isTestAccount=${isTestAccount}`;
+            return postLoginPath ? (`${baseRoute}&postLoginPath=${encodeURIComponent(postLoginPath)}` as const) : (baseRoute as const);
+        },
     },
     TRAVEL_TCS: {
         route: 'travel/terms/:domain/accept',

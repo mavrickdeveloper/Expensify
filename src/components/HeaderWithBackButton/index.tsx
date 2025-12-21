@@ -72,6 +72,7 @@ function HeaderWithBackButton({
     progressBarPercentage,
     style,
     subTitleLink = '',
+    policyID,
     shouldMinimizeMenuButton = false,
     openParentReportInCurrentTab = false,
 }: HeaderWithBackButtonProps) {
@@ -115,11 +116,13 @@ function HeaderWithBackButton({
                 subtitle={stepCounter ? translate('stepCounter', stepCounter) : subtitle}
                 textStyles={[titleColor ? StyleUtils.getTextColorStyle(titleColor) : {}, shouldUseHeadlineHeader && styles.textHeadlineH2]}
                 subTitleLink={subTitleLink}
+                policyID={policyID}
                 numberOfTitleLines={1}
             />
         );
     }, [
         StyleUtils,
+        policyID,
         subTitleLink,
         shouldUseHeadlineHeader,
         progressBarPercentage,

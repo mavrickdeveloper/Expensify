@@ -87,6 +87,7 @@ function AttachmentModalBaseContent({
     const parentReportAction = getReportAction(report?.parentReportID, report?.parentReportActionID);
     const transactionID = (isMoneyRequestAction(parentReportAction) && getOriginalMessage(parentReportAction)?.IOUTransactionID) ?? CONST.DEFAULT_NUMBER_ID;
     const [transactionFromOnyx] = useOnyx(`${ONYXKEYS.COLLECTION.TRANSACTION}${transactionID}`, {canBeMissing: true});
+    const [activePolicyID] = useOnyx(ONYXKEYS.NVP_ACTIVE_POLICY_ID, {canBeMissing: true});
     const transaction = transactionProp ?? transactionFromOnyx;
     const [currentAttachmentLink, setCurrentAttachmentLink] = useState(attachmentLink);
     const bottomSafeAreaPaddingStyle = useBottomSafeSafeAreaPaddingStyle({
@@ -309,6 +310,7 @@ function AttachmentModalBaseContent({
                 shouldSetModalVisibility={false}
                 shouldOverlayDots
                 subTitleLink={currentAttachmentLink ?? ''}
+                policyID={activePolicyID ?? undefined}
             />
             <View style={styles.imageModalImageCenterContainer}>
                 {isLoading && <FullScreenLoadingIndicator testID="attachment-loading-spinner" />}
