@@ -274,7 +274,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
             {(showCards || isLoadingPage || isFeedPending) && (
                 <View style={shouldUseNarrowTableLayout && styles.mb5}>
                     <WorkspaceCompanyCardsTableHeaderButtons
-                        isLoading={isLoadingPage}
+                        isLoading={isLoadingPage && !isNoFeed && !isFeedPending}
                         policyID={policy?.id}
                         feedName={feedName}
                         showTableControls={showTableControls}
@@ -285,7 +285,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
 
             {(isLoadingPage || isFeedPending || isNoFeed) && (
                 <ScrollView>
-                    {isLoadingPage && <TableRowSkeleton fixedNumItems={5} />}
+                    {isLoadingPage && !isNoFeed && !isFeedPending && <TableRowSkeleton fixedNumItems={5} />}
 
                     {isFeedPending && (
                         <View style={styles.flex1}>

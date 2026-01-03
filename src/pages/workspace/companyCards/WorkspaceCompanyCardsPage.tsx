@@ -45,6 +45,12 @@ function WorkspaceCompanyCardsPage({route}: WorkspaceCompanyCardsPageProps) {
     const isNoFeed = !selectedFeed && !isInitiallyLoadingFeeds;
     const isFeedPending = !!selectedFeed?.pending;
     const isFeedAdded = !isInitiallyLoadingFeeds && !isFeedPending && !isNoFeed;
+
+    // Guard: Detect if any feed is being deleted to skip unnecessary API calls during deletion
+    const isAnyFeedBeingDeleted = Object.values(allCardFeeds ?? {}).some(
+        (feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE
+    );
+
     const [shouldShowOfflineModal, setShouldShowOfflineModal] = useState(false);
     const domainOrWorkspaceAccountID = getDomainOrWorkspaceAccountID(workspaceAccountID, selectedFeed);
     const {isOffline} = useNetwork({
@@ -52,19 +58,23 @@ function WorkspaceCompanyCardsPage({route}: WorkspaceCompanyCardsPageProps) {
     });
 
     useEffect(() => {
+        // Skip during deletion - trust optimistic update
+        if (isAnyFeedBeingDeleted) {
+            return;
+        }
         openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID);
-    }, [policyID, domainOrWorkspaceAccountID]);
+    }, [policyID, domainOrWorkspaceAccountID, isAnyFeedBeingDeleted]);
 
     const isLoading = !isOffline && (!allCardFeeds || (isFeedAdded && isLoadingOnyxValue(cardsListMetadata)));
     useEffect(() => {
-        if (isLoading || !bankName || isFeedPending) {
+        if (isLoading || !bankName || isFeedPending || isAnyFeedBeingDeleted) {
             return;
         }
 
         const clientMemberEmails = Object.keys(getMemberAccountIDsForWorkspace(policy?.employeeList));
         openWorkspaceMembersPage(policyID, clientMemberEmails);
         openPolicyCompanyCardsFeed(domainOrWorkspaceAccountID, policyID, bankName);
-    }, [bankName, isLoading, policyID, isFeedPending, domainOrWorkspaceAccountID, policy?.employeeList]);
+    }, [bankName, isLoading, policyID, isFeedPending, domainOrWorkspaceAccountID, policy?.employeeList, isAnyFeedBeingDeleted]);
 
     const {assignCard, isAssigningCardDisabled} = useAssignCard({feedName, policyID, setShouldShowOfflineModal});
 
