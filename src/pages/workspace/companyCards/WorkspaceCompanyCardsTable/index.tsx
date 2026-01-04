@@ -124,9 +124,10 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
 
     const isLoadingCards = cardFeedType === 'directFeed' ? selectedFeed?.accountList === undefined : isLoadingOnyxValue(cardListMetadata) || cardList === undefined;
     // Include isWaitingForInitialData in loading state to prevent BYOC flash during initial load
+    // Include isInitiallyLoadingFeeds to prevent GAP when feedName exists from cache but metadata is still loading
     // Skip loading state when transitioning to no feeds (deletion scenario) to go directly to BYOC
     // Skip loading state when feed is pending - show pending page immediately, no need to load
-    const isLoadingPage = !isOffline && !isTransitioningToNoFeeds && !isFeedPending && (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata) || isWaitingForInitialData);
+    const isLoadingPage = !isOffline && !isTransitioningToNoFeeds && !isFeedPending && (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata) || isWaitingForInitialData || isInitiallyLoadingFeeds);
 
     // CRITICAL: Multiple guards to prevent Table.Body skeleton during deletion:
     // 1. hasAnyFeeds - no feeds means no cards to show
