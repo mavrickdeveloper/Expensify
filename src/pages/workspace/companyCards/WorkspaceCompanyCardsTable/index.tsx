@@ -53,6 +53,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
         cardFeedType,
         selectedFeed,
         allCardFeeds,
+        isAPILoading,
         onyxMetadata: {cardListMetadata, lastSelectedFeedMetadata, allCardFeedsMetadata},
     } = useCompanyCards({policyID: policy?.id});
     const isDirectCardFeed = cardFeedType === 'directFeed';
@@ -70,71 +71,102 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
     // Check if there are any feeds in the data (even if selectedFeed hasn't been determined yet)
     const hasAnyFeeds = allCardFeeds && Object.keys(allCardFeeds).length > 0;
 
-    // Track if we should delay showing BYOC to allow fresh data to arrive
-    // This prevents BYOC flash when stale/empty cache loads before fresh API data
-    const [isWaitingForFreshData, setIsWaitingForFreshData] = useState(true);
-    const hasSeenFeedsRef = useRef(false);
+    // Track if we've ever seen feeds (for transition detection to BYOC on deletion)
+    const [everHadFeeds, setEverHadFeeds] = useState(false);
 
-    // Track if we've ever seen feeds
-    if (hasAnyFeeds || selectedFeed) {
-        hasSeenFeedsRef.current = true;
-    }
-
+    // Update persistent state when feeds are detected
     useEffect(() => {
-        // If we've seen feeds, immediately stop waiting
-        if (hasSeenFeedsRef.current) {
-            setIsWaitingForFreshData(false);
+        if (!hasAnyFeeds && !selectedFeed) {
             return;
         }
+        if (everHadFeeds) {
+            return;
+        }
+        setEverHadFeeds(true);
+    }, [hasAnyFeeds, selectedFeed, everHadFeeds]);
 
-        // If no feeds detected yet, wait 500ms for fresh data before showing BYOC
-        // This gives the API time to respond with fresh data
-        const timer = setTimeout(() => {
-            setIsWaitingForFreshData(false);
-        }, 500);
-
-        return () => clearTimeout(timer);
-    }, [hasAnyFeeds, selectedFeed]);
-
-    // Keep waiting if we haven't seen feeds and timer hasn't expired
-    const isWaitingForInitialData = isWaitingForFreshData && !hasSeenFeedsRef.current;
+    // Derive "has seen feeds" by combining persistent state with current values
+    const hasSeenFeeds = everHadFeeds || !!hasAnyFeeds || !!selectedFeed;
 
     // Check if the selected feed is being deleted (optimistic update marks it with pendingAction: DELETE)
     const isSelectedFeedBeingDeleted = selectedFeed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE;
 
+    // Check if ANY feed is being deleted (for skipping loading checks during deletion transitions)
+    const isAnyFeedBeingDeleted = !!hasAnyFeeds && Object.values(allCardFeeds ?? {}).some(
+        (feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE
+    );
+
     // Check if ALL remaining feeds are being deleted (user deleted the last feed)
-    const isAllFeedsBeingDeleted = hasAnyFeeds && Object.values(allCardFeeds ?? {}).every(
+    const isAllFeedsBeingDeleted = !!hasAnyFeeds && Object.values(allCardFeeds ?? {}).every(
         (feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE
     );
 
     // When transitioning from having feeds to no feeds (all feeds deleted),
     // don't show skeleton - go directly to BYOC
     // This includes: feeds already removed OR all remaining feeds are being deleted
-    const isTransitioningToNoFeeds = (hasSeenFeedsRef.current && !hasAnyFeeds) || isAllFeedsBeingDeleted;
+    const isTransitioningToNoFeeds = (hasSeenFeeds && !hasAnyFeeds && !selectedFeed) || isAllFeedsBeingDeleted;
+
+    // Track the previous feed count to detect when a feed was just removed
+    const prevFeedCountRef = useRef<number>(allCardFeeds ? Object.keys(allCardFeeds).length : 0);
+    const currentFeedCount = allCardFeeds ? Object.keys(allCardFeeds).length : 0;
+
+    // Track "recently deleted" state that persists beyond just one render cycle
+    // This is needed because after a feed is removed, loading states can flicker for multiple renders
+    const [recentlyDeletedFeed, setRecentlyDeletedFeed] = useState(false);
+
+    // Detect when a feed was deleted and set the debounced state
+    useEffect(() => {
+        const prevCount = prevFeedCountRef.current;
+        prevFeedCountRef.current = currentFeedCount;
+
+        // Feed was just deleted (count decreased) and we still have feeds remaining
+        if (prevCount > currentFeedCount && currentFeedCount > 0) {
+            setRecentlyDeletedFeed(true);
+            // Clear the flag after a short delay to allow all loading states to settle
+            const timer = setTimeout(() => setRecentlyDeletedFeed(false), 500);
+            return () => clearTimeout(timer);
+        }
+        return undefined;
+    }, [currentFeedCount]);
+
+    // When transitioning between feeds (deleting one but still have others), skip loading states
+    // because the next feed's data is already cached - no need to show skeleton
+    // Include recentlyDeletedFeed to persist the transition state until all loading settles
+    const isTransitioningBetweenFeeds = (isAnyFeedBeingDeleted && !isAllFeedsBeingDeleted) || recentlyDeletedFeed;
 
     // Only show empty state when:
     // 1. No selected feed
     // 2. Not still loading feeds metadata
     // 3. Confirmed no feeds exist in data
-    // 4. Not waiting for initial data (prevents BYOC flash from stale cache)
+    // 4. Not loading from API (prevents BYOC flash during API call)
     // 5. OR when transitioning to no feeds (ensures immediate BYOC on last feed deletion)
-    const isNoFeed = (!selectedFeed && !isInitiallyLoadingFeeds && !hasAnyFeeds && !isWaitingForInitialData) || isTransitioningToNoFeeds;
+    const isNoFeed = (!selectedFeed && !isInitiallyLoadingFeeds && !hasAnyFeeds && !isAPILoading) || !!isTransitioningToNoFeeds;
     const isFeedPending = !!selectedFeed?.pending;
-    const isLoadingFeed = (!feedName && isInitiallyLoadingFeeds) || policy?.id === undefined || isLoadingOnyxValue(lastSelectedFeedMetadata);
+
+    // Check if we have confirmed no feeds exist (not just loading)
+    // This is true when we're not loading feeds metadata, not loading from API, and have no feeds
+    const isConfirmedNoFeeds = !isInitiallyLoadingFeeds && !isAPILoading && !hasAnyFeeds;
+
+    // Skip lastSelectedFeedMetadata loading check during deletion - it's just an optimistic update, not actual loading
+    // This prevents skeleton flash when transitioning between feeds after deletion
+    // Also skip when we've confirmed no feeds exist - there's nothing to load for lastSelectedFeed
+    const isLoadingFeed = (!feedName && isInitiallyLoadingFeeds) || policy?.id === undefined || (!isAnyFeedBeingDeleted && !isConfirmedNoFeeds && isLoadingOnyxValue(lastSelectedFeedMetadata));
 
     const isLoadingCards = cardFeedType === 'directFeed' ? selectedFeed?.accountList === undefined : isLoadingOnyxValue(cardListMetadata) || cardList === undefined;
-    // Include isWaitingForInitialData in loading state to prevent BYOC flash during initial load
+    // Include isAPILoading in loading state to show skeleton while API call is in progress
     // Include isInitiallyLoadingFeeds to prevent GAP when feedName exists from cache but metadata is still loading
     // Skip loading state when transitioning to no feeds (deletion scenario) to go directly to BYOC
+    // Skip loading state when transitioning between feeds (next feed's data is already cached)
     // Skip loading state when feed is pending - show pending page immediately, no need to load
-    const isLoadingPage = !isOffline && !isTransitioningToNoFeeds && !isFeedPending && (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata) || isWaitingForInitialData || isInitiallyLoadingFeeds);
+    const isLoadingPage = !isOffline && !isTransitioningToNoFeeds && !isTransitioningBetweenFeeds && !isFeedPending && (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata) || !!isAPILoading || isInitiallyLoadingFeeds);
 
     // CRITICAL: Multiple guards to prevent Table.Body skeleton during deletion:
     // 1. hasAnyFeeds - no feeds means no cards to show
     // 2. !isSelectedFeedBeingDeleted - feed is being deleted, don't show its cards
     // 3. !isNoFeed - already determined we should show empty state
+    // 4. !isLoadingPage - prevent dual rendering: skeleton in ScrollView AND cards in Table.Body
     // Without these, Table.Body renders with isLoadingCards=true, showing ListEmptyComponent skeleton
-    const showCards = hasAnyFeeds && !isSelectedFeedBeingDeleted && !isInitiallyLoadingFeeds && !isFeedPending && !isNoFeed && !isLoadingFeed;
+    const showCards = !!hasAnyFeeds && !isSelectedFeedBeingDeleted && !isInitiallyLoadingFeeds && !isFeedPending && !isNoFeed && !isLoadingFeed && !isLoadingPage;
     const showTableControls = showCards && !!selectedFeed && !isLoadingCards;
 
     const isGB = countryByIp === CONST.COUNTRY.GB;
@@ -332,7 +364,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
             filters={filterConfig}
             ListEmptyComponent={isLoadingCards ? <TableRowSkeleton fixedNumItems={5} /> : <WorkspaceCompanyCardsFeedAddedEmptyPage shouldShowGBDisclaimer={shouldShowGBDisclaimer} />}
         >
-            {(showCards || isLoadingPage || isFeedPending) && (
+            {!!(showCards || isLoadingPage || isFeedPending) && (
                 <View style={shouldUseNarrowTableLayout && styles.mb5}>
                     <WorkspaceCompanyCardsTableHeaderButtons
                         isLoading={isLoadingPage && !isFeedPending}
@@ -368,7 +400,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
                 </ScrollView>
             )}
 
-            {showCards && (
+            {!!showCards && (
                 <>
                     {!shouldUseNarrowTableLayout && !isLoadingFeed && <Table.Header />}
                     <Table.Body />

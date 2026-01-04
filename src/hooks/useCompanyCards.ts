@@ -28,6 +28,8 @@ type UsCompanyCardsResult = Partial<{
     allCardFeeds: CombinedCardFeeds;
     companyCardFeeds: CompanyFeeds;
     selectedFeed: CombinedCardFeed;
+    /** Whether the API call to load feeds is in progress (set by openPolicyCompanyCardsPage action) */
+    isAPILoading: boolean;
 }> & {
     onyxMetadata: {
         cardListMetadata: ResultMetadata<WorkspaceCardsList>;
@@ -38,7 +40,7 @@ type UsCompanyCardsResult = Partial<{
 
 function useCompanyCards({policyID, feedName: feedNameProp}: UseCompanyCardsProps): UsCompanyCardsResult {
     const [lastSelectedFeed, lastSelectedFeedMetadata] = useOnyx(`${ONYXKEYS.COLLECTION.LAST_SELECTED_FEED}${policyID}`, {canBeMissing: true});
-    const [allCardFeeds, allCardFeedsMetadata] = useCardFeeds(policyID);
+    const [allCardFeeds, allCardFeedsMetadata, , isAnyFeedLoading] = useCardFeeds(policyID);
 
     const feedName = feedNameProp ?? getSelectedFeed(lastSelectedFeed, allCardFeeds);
     const bankName = feedName ? getCompanyCardFeed(feedName) : undefined;
@@ -66,10 +68,10 @@ function useCompanyCards({policyID, feedName: feedNameProp}: UseCompanyCardsProp
     };
 
     if (!policyID) {
-        return {onyxMetadata};
+        return {onyxMetadata, isAPILoading: isAnyFeedLoading};
     }
 
-    return {allCardFeeds, feedName, companyCardFeeds, cardList, assignedCards, cardNames, selectedFeed, bankName, cardFeedType, onyxMetadata};
+    return {allCardFeeds, feedName, companyCardFeeds, cardList, assignedCards, cardNames, selectedFeed, bankName, cardFeedType, isAPILoading: isAnyFeedLoading, onyxMetadata};
 }
 
 export default useCompanyCards;

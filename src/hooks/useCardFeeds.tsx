@@ -31,11 +31,46 @@ type CombinedCardFeeds = Record<CompanyCardFeedWithDomainID, CombinedCardFeed>;
  *     1. Combined workspace and domain card feeds specific to the given policyID (or `undefined` if unavailable).
  *     2. The result metadata from the Onyx collection fetch.
  *     3. Card feeds specific to the given policyID (or `undefined` if unavailable).
+ *     4. Whether any feed is currently loading from API (isLoading flag set by openPolicyCompanyCardsPage action).
  */
-const useCardFeeds = (policyID: string | undefined): [CombinedCardFeeds | undefined, ResultMetadata<OnyxCollection<CardFeeds>>, CardFeeds | undefined] => {
+const useCardFeeds = (policyID: string | undefined): [CombinedCardFeeds | undefined, ResultMetadata<OnyxCollection<CardFeeds>>, CardFeeds | undefined, boolean] => {
     const workspaceAccountID = useWorkspaceAccountID(policyID);
     const [allFeeds, allFeedsResult] = useOnyx(ONYXKEYS.COLLECTION.SHARED_NVP_PRIVATE_DOMAIN_MEMBER, {canBeMissing: true});
     const defaultFeed = allFeeds?.[`${ONYXKEYS.COLLECTION.SHARED_NVP_PRIVATE_DOMAIN_MEMBER}${workspaceAccountID}`];
+
+    // Check if any feed is currently loading from API
+    // This flag is set by openPolicyCompanyCardsPage() action via optimisticData/successData/failureData
+    const isAnyFeedLoading = useMemo(() => {
+        // If no feeds data at all, Onyx is still initializing
+        if (!allFeeds) {
+            return false;
+        }
+
+        // If workspaceAccountID is 0, the policy hasn't loaded yet - consider it loading
+        // to prevent BYOC flash before we know if there are feeds
+        if (workspaceAccountID === 0) {
+            return true;
+        }
+
+        // Check if any feed has explicit isLoading: true flag
+        const hasExplicitlyLoadingFeed = Object.values(allFeeds).some((feed) => feed?.isLoading === true);
+        if (hasExplicitlyLoadingFeed) {
+            return true;
+        }
+
+        // Check if the workspace-specific entry exists in allFeeds
+        // If it doesn't exist yet, the initial API call hasn't completed yet
+        // (the action creates this entry via optimisticData when called)
+        // This handles the gap between Onyx cache load and API action being called
+        const workspaceFeedKey = `${ONYXKEYS.COLLECTION.SHARED_NVP_PRIVATE_DOMAIN_MEMBER}${workspaceAccountID}`;
+        const workspaceFeedEntry = allFeeds[workspaceFeedKey];
+
+        if (!workspaceFeedEntry) {
+            return true;
+        }
+
+        return false;
+    }, [allFeeds, workspaceAccountID]);
 
     const workspaceFeeds = useMemo(() => {
         if (!policyID || !allFeeds) {
@@ -75,7 +110,7 @@ const useCardFeeds = (policyID: string | undefined): [CombinedCardFeeds | undefi
         }, result);
     }, [allFeeds, policyID, workspaceAccountID]);
 
-    return [workspaceFeeds, allFeedsResult, defaultFeed];
+    return [workspaceFeeds, allFeedsResult, defaultFeed, isAnyFeedLoading];
 };
 
 export default useCardFeeds;
