@@ -54,7 +54,13 @@ function WorkspaceCompanyCardsPage({route}: WorkspaceCompanyCardsPageProps) {
     const [shouldShowOfflineModal, setShouldShowOfflineModal] = useState(false);
     const domainOrWorkspaceAccountID = getDomainOrWorkspaceAccountID(workspaceAccountID, selectedFeed);
     const {isOffline} = useNetwork({
-        onReconnect: () => openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID),
+        onReconnect: () => {
+            // Skip when no feeds exist - nothing to load, prevents flickering
+            if (isNoFeed) {
+                return;
+            }
+            openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID);
+        },
     });
 
     useEffect(() => {
@@ -62,8 +68,13 @@ function WorkspaceCompanyCardsPage({route}: WorkspaceCompanyCardsPageProps) {
         if (isAnyFeedBeingDeleted) {
             return;
         }
+        // Skip when no feeds exist - nothing to load, and calling the API would
+        // cause isLoading to toggle which makes the empty state (BYOC) flicker
+        if (isNoFeed) {
+            return;
+        }
         openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID);
-    }, [policyID, domainOrWorkspaceAccountID, isAnyFeedBeingDeleted]);
+    }, [policyID, domainOrWorkspaceAccountID, isAnyFeedBeingDeleted, isNoFeed]);
 
     const isLoading = !isOffline && (!allCardFeeds || (isFeedAdded && isLoadingOnyxValue(cardsListMetadata)));
     useEffect(() => {

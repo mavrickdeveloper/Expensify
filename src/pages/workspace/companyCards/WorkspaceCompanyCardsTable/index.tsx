@@ -52,6 +52,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
         cardNames,
         cardFeedType,
         selectedFeed,
+        allCardFeeds,
         onyxMetadata: {cardListMetadata, lastSelectedFeedMetadata, allCardFeedsMetadata},
     } = useCompanyCards({policyID: policy?.id});
     const isDirectCardFeed = cardFeedType === 'directFeed';
@@ -66,14 +67,73 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
     const hasNoAssignedCard = Object.keys(assignedCards ?? {}).length === 0;
     const isInitiallyLoadingFeeds = isLoadingOnyxValue(allCardFeedsMetadata);
 
-    const isNoFeed = !selectedFeed && !isInitiallyLoadingFeeds;
+    // Check if there are any feeds in the data (even if selectedFeed hasn't been determined yet)
+    const hasAnyFeeds = allCardFeeds && Object.keys(allCardFeeds).length > 0;
+
+    // Track if we should delay showing BYOC to allow fresh data to arrive
+    // This prevents BYOC flash when stale/empty cache loads before fresh API data
+    const [isWaitingForFreshData, setIsWaitingForFreshData] = useState(true);
+    const hasSeenFeedsRef = useRef(false);
+
+    // Track if we've ever seen feeds
+    if (hasAnyFeeds || selectedFeed) {
+        hasSeenFeedsRef.current = true;
+    }
+
+    useEffect(() => {
+        // If we've seen feeds, immediately stop waiting
+        if (hasSeenFeedsRef.current) {
+            setIsWaitingForFreshData(false);
+            return;
+        }
+
+        // If no feeds detected yet, wait 500ms for fresh data before showing BYOC
+        // This gives the API time to respond with fresh data
+        const timer = setTimeout(() => {
+            setIsWaitingForFreshData(false);
+        }, 500);
+
+        return () => clearTimeout(timer);
+    }, [hasAnyFeeds, selectedFeed]);
+
+    // Keep waiting if we haven't seen feeds and timer hasn't expired
+    const isWaitingForInitialData = isWaitingForFreshData && !hasSeenFeedsRef.current;
+
+    // Check if the selected feed is being deleted (optimistic update marks it with pendingAction: DELETE)
+    const isSelectedFeedBeingDeleted = selectedFeed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE;
+
+    // Check if ALL remaining feeds are being deleted (user deleted the last feed)
+    const isAllFeedsBeingDeleted = hasAnyFeeds && Object.values(allCardFeeds ?? {}).every(
+        (feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE
+    );
+
+    // When transitioning from having feeds to no feeds (all feeds deleted),
+    // don't show skeleton - go directly to BYOC
+    // This includes: feeds already removed OR all remaining feeds are being deleted
+    const isTransitioningToNoFeeds = (hasSeenFeedsRef.current && !hasAnyFeeds) || isAllFeedsBeingDeleted;
+
+    // Only show empty state when:
+    // 1. No selected feed
+    // 2. Not still loading feeds metadata
+    // 3. Confirmed no feeds exist in data
+    // 4. Not waiting for initial data (prevents BYOC flash from stale cache)
+    // 5. OR when transitioning to no feeds (ensures immediate BYOC on last feed deletion)
+    const isNoFeed = (!selectedFeed && !isInitiallyLoadingFeeds && !hasAnyFeeds && !isWaitingForInitialData) || isTransitioningToNoFeeds;
     const isFeedPending = !!selectedFeed?.pending;
     const isLoadingFeed = (!feedName && isInitiallyLoadingFeeds) || policy?.id === undefined || isLoadingOnyxValue(lastSelectedFeedMetadata);
 
     const isLoadingCards = cardFeedType === 'directFeed' ? selectedFeed?.accountList === undefined : isLoadingOnyxValue(cardListMetadata) || cardList === undefined;
-    const isLoadingPage = !isOffline && (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata));
+    // Include isWaitingForInitialData in loading state to prevent BYOC flash during initial load
+    // Skip loading state when transitioning to no feeds (deletion scenario) to go directly to BYOC
+    // Skip loading state when feed is pending - show pending page immediately, no need to load
+    const isLoadingPage = !isOffline && !isTransitioningToNoFeeds && !isFeedPending && (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata) || isWaitingForInitialData);
 
-    const showCards = !isInitiallyLoadingFeeds && !isFeedPending && !isNoFeed && !isLoadingFeed;
+    // CRITICAL: Multiple guards to prevent Table.Body skeleton during deletion:
+    // 1. hasAnyFeeds - no feeds means no cards to show
+    // 2. !isSelectedFeedBeingDeleted - feed is being deleted, don't show its cards
+    // 3. !isNoFeed - already determined we should show empty state
+    // Without these, Table.Body renders with isLoadingCards=true, showing ListEmptyComponent skeleton
+    const showCards = hasAnyFeeds && !isSelectedFeedBeingDeleted && !isInitiallyLoadingFeeds && !isFeedPending && !isNoFeed && !isLoadingFeed;
     const showTableControls = showCards && !!selectedFeed && !isLoadingCards;
 
     const isGB = countryByIp === CONST.COUNTRY.GB;
@@ -274,7 +334,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
             {(showCards || isLoadingPage || isFeedPending) && (
                 <View style={shouldUseNarrowTableLayout && styles.mb5}>
                     <WorkspaceCompanyCardsTableHeaderButtons
-                        isLoading={isLoadingPage && !isNoFeed && !isFeedPending}
+                        isLoading={isLoadingPage && !isFeedPending}
                         policyID={policy?.id}
                         feedName={feedName}
                         showTableControls={showTableControls}
@@ -285,15 +345,18 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
 
             {(isLoadingPage || isFeedPending || isNoFeed) && (
                 <ScrollView>
-                    {isLoadingPage && !isNoFeed && !isFeedPending && <TableRowSkeleton fixedNumItems={5} />}
+                    {/* Priority 1: Show skeleton when loading (even if isNoFeed is true from stale cache) */}
+                    {isLoadingPage && !isFeedPending && <TableRowSkeleton fixedNumItems={5} />}
 
-                    {isFeedPending && (
+                    {/* Priority 2: Show pending page when feed is pending and not loading */}
+                    {!isLoadingPage && isFeedPending && (
                         <View style={styles.flex1}>
                             <WorkspaceCompanyCardsFeedPendingPage />
                         </View>
                     )}
 
-                    {isNoFeed && (
+                    {/* Priority 3: Show empty state only when confirmed no feed and not loading */}
+                    {!isLoadingPage && !isFeedPending && isNoFeed && (
                         <View style={styles.flex1}>
                             <WorkspaceCompanyCardPageEmptyState
                                 policy={policy}
