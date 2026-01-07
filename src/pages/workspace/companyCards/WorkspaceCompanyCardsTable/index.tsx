@@ -1,5 +1,5 @@
 import type {ListRenderItemInfo} from '@shopify/flash-list';
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {View} from 'react-native';
 import CardFeedIcon from '@components/CardFeedIcon';
 import ScrollView from '@components/ScrollView';
@@ -10,6 +10,7 @@ import useCompanyCards from '@hooks/useCompanyCards';
 import useLocalize from '@hooks/useLocalize';
 import useNetwork from '@hooks/useNetwork';
 import useOnyx from '@hooks/useOnyx';
+import usePrevious from '@hooks/usePrevious';
 import useResponsiveLayout from '@hooks/useResponsiveLayout';
 import useThemeStyles from '@hooks/useThemeStyles';
 import {getDomainOrWorkspaceAccountID, isMaskedCardNumberEqual} from '@libs/CardUtils';
@@ -52,6 +53,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
         cardNames,
         cardFeedType,
         selectedFeed,
+        allCardFeeds,
         onyxMetadata: {cardListMetadata, lastSelectedFeedMetadata, allCardFeedsMetadata},
     } = useCompanyCards({policyID: policy?.id});
     const isDirectCardFeed = cardFeedType === 'directFeed';
@@ -66,12 +68,52 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
     const hasNoAssignedCard = Object.keys(assignedCards ?? {}).length === 0;
     const isInitiallyLoadingFeeds = isLoadingOnyxValue(allCardFeedsMetadata);
 
+    // Detect deletion in progress using Onyx's pendingAction pattern.
+    const isAnyFeedBeingDeleted = useMemo(
+        () => Object.values(allCardFeeds ?? {}).some((feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE),
+        [allCardFeeds],
+    );
+    const isAllFeedsBeingDeleted = useMemo(() => {
+        const feeds = Object.values(allCardFeeds ?? {});
+        return feeds.length > 0 && feeds.every((feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE);
+    }, [allCardFeeds]);
+
+    // Track when deletion just completed (pendingAction cleared).
+    const prevIsAnyFeedBeingDeleted = usePrevious(isAnyFeedBeingDeleted);
+    const justFinishedDeletion = prevIsAnyFeedBeingDeleted === true && isAnyFeedBeingDeleted === false;
+
+    // Direct data check: if no non-deleted feeds exist, skip loading state entirely.
+    // This is more robust than timing-based checks because it looks at actual data.
+    const hasNoNonDeletedFeeds = useMemo(() => {
+        const feeds = Object.values(allCardFeeds ?? {});
+        return feeds.length === 0 || feeds.every((feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE);
+    }, [allCardFeeds]);
+
+    // Track previous feedName to detect transitions.
+    const prevFeedName = usePrevious(feedName);
+    const isTransitioningBetweenFeeds = prevFeedName !== undefined && prevFeedName !== feedName;
+
     const isNoFeed = !selectedFeed && !isInitiallyLoadingFeeds;
+
+    // Track transition to empty state (no feeds left after deletion).
+    const prevIsNoFeed = usePrevious(isNoFeed);
+    const isTransitioningToEmptyState = prevIsNoFeed === false && isNoFeed === true;
+
+    // Detect transition to empty state (deleting last feed -> BYOC).
+    const isTransitioningToNoFeeds = isAllFeedsBeingDeleted || isTransitioningToEmptyState;
     const isFeedPending = !!selectedFeed?.pending;
     const isLoadingFeed = (!feedName && isInitiallyLoadingFeeds) || policy?.id === undefined || isLoadingOnyxValue(lastSelectedFeedMetadata);
 
     const isLoadingCards = cardFeedType === 'directFeed' ? selectedFeed?.accountList === undefined : isLoadingOnyxValue(cardListMetadata) || cardList === undefined;
-    const isLoadingPage = !isOffline && (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata));
+
+    // Skip loading states during deletion transitions.
+    const isLoadingPage = !isOffline &&
+        !isTransitioningToNoFeeds &&
+        !isTransitioningBetweenFeeds &&
+        !isAnyFeedBeingDeleted &&
+        !justFinishedDeletion &&
+        !hasNoNonDeletedFeeds &&
+        (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata));
 
     const showCards = !isInitiallyLoadingFeeds && !isFeedPending && !isNoFeed && !isLoadingFeed;
     const showTableControls = showCards && !!selectedFeed && !isLoadingCards;
@@ -285,7 +327,8 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
 
             {(isLoadingPage || isFeedPending || isNoFeed) && (
                 <ScrollView>
-                    {isLoadingPage && <TableRowSkeleton fixedNumItems={5} />}
+                    {/* Prevent dual-render bug: don't show skeleton if we're showing empty state */}
+                    {isLoadingPage && !isNoFeed && <TableRowSkeleton fixedNumItems={5} />}
 
                     {isFeedPending && (
                         <View style={styles.flex1}>

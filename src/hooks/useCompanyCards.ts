@@ -1,7 +1,8 @@
+import {useEffect, useRef} from 'react';
 import type {OnyxCollection, OnyxEntry, ResultMetadata} from 'react-native-onyx';
 import type {ValueOf} from 'type-fest';
 import {getCompanyCardFeed, getCompanyFeeds, getPlaidInstitutionId, getSelectedFeed} from '@libs/CardUtils';
-import type CONST from '@src/CONST';
+import CONST from '@src/CONST';
 import ONYXKEYS from '@src/ONYXKEYS';
 import type {CardFeeds, CardList} from '@src/types/onyx';
 import type {AssignableCardsList, WorkspaceCardsList} from '@src/types/onyx/Card';
@@ -40,7 +41,48 @@ function useCompanyCards({policyID, feedName: feedNameProp}: UseCompanyCardsProp
     const [lastSelectedFeed, lastSelectedFeedMetadata] = useOnyx(`${ONYXKEYS.COLLECTION.LAST_SELECTED_FEED}${policyID}`, {canBeMissing: true});
     const [allCardFeeds, allCardFeedsMetadata] = useCardFeeds(policyID);
 
-    const feedName = feedNameProp ?? getSelectedFeed(lastSelectedFeed, allCardFeeds);
+    // Track recently deleted feeds to prevent stale API responses from restoring them.
+    // This ref persists across renders and remembers feeds that were deleted, even after pendingAction is cleared.
+    const recentlyDeletedFeedsRef = useRef<Set<string>>(new Set());
+
+    // Track feeds that are currently being deleted (pendingAction === DELETE).
+    // When a feed enters DELETE state, we add it to recentlyDeletedFeedsRef.
+    // When a feed is completely removed from allCardFeeds, we can clear it from the ref.
+    useEffect(() => {
+        if (!allCardFeeds) {
+            return;
+        }
+
+        // Find feeds currently being deleted
+        const feedsBeingDeleted = Object.entries(allCardFeeds)
+            .filter(([, feed]) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE)
+            .map(([key]) => key);
+
+        // Add newly detected deleting feeds to our tracking set
+        feedsBeingDeleted.forEach((feedKey) => {
+            recentlyDeletedFeedsRef.current.add(feedKey);
+        });
+
+        // Clean up: remove feeds from tracking that are truly gone (not in allCardFeeds at all)
+        // This allows re-adding a feed with the same name later
+        recentlyDeletedFeedsRef.current.forEach((deletedFeedKey) => {
+            if (!(deletedFeedKey in allCardFeeds)) {
+                recentlyDeletedFeedsRef.current.delete(deletedFeedKey);
+            }
+        });
+    }, [allCardFeeds]);
+
+    const rawFeedName = feedNameProp ?? getSelectedFeed(lastSelectedFeed, allCardFeeds);
+
+    // Validate that the selected feed:
+    // 1. Actually exists in allCardFeeds
+    // 2. Is NOT currently being deleted (pendingAction === DELETE)
+    // 3. Was NOT recently deleted (tracked in recentlyDeletedFeedsRef)
+    // This prevents stale API responses from briefly restoring a deleted feed.
+    const wasRecentlyDeleted = rawFeedName ? recentlyDeletedFeedsRef.current.has(rawFeedName) : false;
+    const feedExistsAndNotDeleted = rawFeedName && allCardFeeds?.[rawFeedName] && !wasRecentlyDeleted && allCardFeeds[rawFeedName]?.pendingAction !== CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE;
+    const feedName = feedExistsAndNotDeleted ? rawFeedName : undefined;
+
     const bankName = feedName ? getCompanyCardFeed(feedName) : undefined;
 
     const [cardsList, cardListMetadata] = useCardsList(feedName);

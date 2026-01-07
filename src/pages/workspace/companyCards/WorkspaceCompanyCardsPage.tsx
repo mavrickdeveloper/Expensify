@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useMemo, useState} from 'react';
 import DecisionModal from '@components/DecisionModal';
 import useAssignCard from '@hooks/useAssignCard';
 import useCardsList from '@hooks/useCardsList';
@@ -7,6 +7,7 @@ import {useMemoizedLazyIllustrations} from '@hooks/useLazyAsset';
 import useLocalize from '@hooks/useLocalize';
 import useNetwork from '@hooks/useNetwork';
 import usePolicy from '@hooks/usePolicy';
+import usePrevious from '@hooks/usePrevious';
 import useResponsiveLayout from '@hooks/useResponsiveLayout';
 import {openWorkspaceMembersPage} from '@libs/actions/Policy/Member';
 import {getDomainOrWorkspaceAccountID} from '@libs/CardUtils';
@@ -51,12 +52,50 @@ function WorkspaceCompanyCardsPage({route}: WorkspaceCompanyCardsPageProps) {
         onReconnect: () => openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID),
     });
 
+    // Detect deletion in progress using Onyx's pendingAction pattern.
+    const isAnyFeedBeingDeleted = useMemo(
+        () => Object.values(allCardFeeds ?? {}).some((feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE),
+        [allCardFeeds],
+    );
+
+    // Track previous values to detect transitions between feeds.
+    const prevDomainOrWorkspaceAccountID = usePrevious(domainOrWorkspaceAccountID);
+    const isTransitioningBetweenFeeds = prevDomainOrWorkspaceAccountID !== undefined && prevDomainOrWorkspaceAccountID !== domainOrWorkspaceAccountID;
+
+    // Check if the target feed's data is already cached (no need to refetch).
+    const isTargetFeedAlreadyCached = selectedFeed !== undefined && !isLoadingOnyxValue(allCardFeedsMetadata);
+
     useEffect(() => {
+        // Skip API call during deletion - trust optimistic updates.
+        if (isAnyFeedBeingDeleted) {
+            return;
+        }
+
+        // Skip API call if no feed is selected - handles post-deletion race condition.
+        if (!feedName) {
+            return;
+        }
+
+        // Skip API call when in empty state (BYOC) - no feeds to fetch.
+        if (isNoFeed) {
+            return;
+        }
+
+        // Skip API call if transitioning between feeds and target is cached.
+        if (isTransitioningBetweenFeeds && isTargetFeedAlreadyCached) {
+            return;
+        }
+
         openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID);
-    }, [policyID, domainOrWorkspaceAccountID]);
+    }, [policyID, domainOrWorkspaceAccountID, isAnyFeedBeingDeleted, isNoFeed, isTransitioningBetweenFeeds, isTargetFeedAlreadyCached, feedName]);
 
     const isLoading = !isOffline && (!allCardFeeds || (isFeedAdded && isLoadingOnyxValue(cardsListMetadata)));
     useEffect(() => {
+        // Skip API call during deletion.
+        if (isAnyFeedBeingDeleted) {
+            return;
+        }
+
         if (isLoading || !bankName || isFeedPending) {
             return;
         }
@@ -64,7 +103,7 @@ function WorkspaceCompanyCardsPage({route}: WorkspaceCompanyCardsPageProps) {
         const clientMemberEmails = Object.keys(getMemberAccountIDsForWorkspace(policy?.employeeList));
         openWorkspaceMembersPage(policyID, clientMemberEmails);
         openPolicyCompanyCardsFeed(domainOrWorkspaceAccountID, policyID, bankName);
-    }, [bankName, isLoading, policyID, isFeedPending, domainOrWorkspaceAccountID, policy?.employeeList]);
+    }, [bankName, isLoading, policyID, isFeedPending, domainOrWorkspaceAccountID, policy?.employeeList, isAnyFeedBeingDeleted]);
 
     const {assignCard, isAssigningCardDisabled} = useAssignCard({feedName, policyID, setShouldShowOfflineModal});
 
