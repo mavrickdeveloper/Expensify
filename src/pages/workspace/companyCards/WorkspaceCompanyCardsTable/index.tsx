@@ -52,6 +52,8 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
         cardNames,
         cardFeedType,
         selectedFeed,
+        allCardFeeds,
+        isAPILoading,
         onyxMetadata: {cardListMetadata, lastSelectedFeedMetadata, allCardFeedsMetadata},
     } = useCompanyCards({policyID: policy?.id});
     const isDirectCardFeed = cardFeedType === 'directFeed';
@@ -66,15 +68,126 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
     const hasNoAssignedCard = Object.keys(assignedCards ?? {}).length === 0;
     const isInitiallyLoadingFeeds = isLoadingOnyxValue(allCardFeedsMetadata);
 
-    const isNoFeed = !selectedFeed && !isInitiallyLoadingFeeds;
+    // ============ FEED EXISTENCE CHECKS ============
+
+    // Check if there are any feeds in the data
+    const hasAnyFeeds = allCardFeeds && Object.keys(allCardFeeds).length > 0;
+
+    // Track if we've ever seen feeds in this component's lifecycle
+    // Used to detect "transitioning to no feeds" (deletion of last feed)
+    const [everHadFeeds, setEverHadFeeds] = useState(false);
+
+    useEffect(() => {
+        if (!hasAnyFeeds && !selectedFeed) {
+            return;
+        }
+        if (everHadFeeds) {
+            return;
+        }
+        setEverHadFeeds(true);
+    }, [hasAnyFeeds, selectedFeed, everHadFeeds]);
+
+    // Derive "has seen feeds" by combining persistent state with current values
+    const hasSeenFeeds = everHadFeeds || !!hasAnyFeeds || !!selectedFeed;
+
+    // ============ DELETION DETECTION (Using Onyx pendingAction) ============
+
+    // Check if the selected feed is being deleted
+    const isSelectedFeedBeingDeleted = selectedFeed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE;
+
+    // Check if ANY feed is being deleted
+    const isAnyFeedBeingDeleted = !!hasAnyFeeds && Object.values(allCardFeeds ?? {}).some(
+        (feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE
+    );
+
+    // Check if ALL remaining feeds are being deleted (last feed deletion)
+    const isAllFeedsBeingDeleted = !!hasAnyFeeds && Object.values(allCardFeeds ?? {}).every(
+        (feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE
+    );
+
+    // ============ TRANSITION DETECTION (State-based, No Timeouts) ============
+
+    // Detect transition to BYOC (no feeds state)
+    // True when: we previously had feeds but now have none, OR all feeds are being deleted
+    const isTransitioningToNoFeeds = (hasSeenFeeds && !hasAnyFeeds && !selectedFeed) || isAllFeedsBeingDeleted;
+
+    // Detect transition between feeds (deleting one but others remain)
+    // When this is true, we skip loading states because the next feed's data is already cached
+    const isTransitioningBetweenFeeds = isAnyFeedBeingDeleted && !isAllFeedsBeingDeleted;
+
+    // ============ CONFIRMED NO FEEDS CHECK ============
+
+    // Check if we have CONFIRMED no feeds exist (not just stale cache)
+    // This is true when:
+    // 1. Not loading feeds metadata (Onyx subscription settled)
+    // 2. Not loading from API (initial fetch completed)
+    // 3. No feeds in data
+    const isConfirmedNoFeeds = !isInitiallyLoadingFeeds && !isAPILoading && !hasAnyFeeds;
+
+    // ============ UPDATED STATE CALCULATIONS ============
+
+    // isNoFeed: Show empty state (BYOC) when:
+    // 1. No selected feed
+    // 2. Not loading feeds metadata
+    // 3. No feeds in data
+    // 4. NOT loading from API (prevents BYOC flash during initial API call)
+    // 5. OR when transitioning to no feeds (immediate BYOC on last feed deletion)
+    const isNoFeed = (!selectedFeed && !isInitiallyLoadingFeeds && !hasAnyFeeds && !isAPILoading) || isTransitioningToNoFeeds;
+
     const isFeedPending = !!selectedFeed?.pending;
-    const isLoadingFeed = (!feedName && isInitiallyLoadingFeeds) || policy?.id === undefined || isLoadingOnyxValue(lastSelectedFeedMetadata);
+
+    // isLoadingFeed: Updated to skip lastSelectedFeedMetadata check when appropriate
+    // - Skip during deletion (trust optimistic update)
+    // - Skip when confirmed no feeds exist (nothing to load for lastSelectedFeed)
+    const isLoadingFeed = (!feedName && isInitiallyLoadingFeeds) ||
+        policy?.id === undefined ||
+        (!isAnyFeedBeingDeleted && !isConfirmedNoFeeds && isLoadingOnyxValue(lastSelectedFeedMetadata));
 
     const isLoadingCards = cardFeedType === 'directFeed' ? selectedFeed?.accountList === undefined : isLoadingOnyxValue(cardListMetadata) || cardList === undefined;
-    const isLoadingPage = !isOffline && (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata));
 
-    const showCards = !isInitiallyLoadingFeeds && !isFeedPending && !isNoFeed && !isLoadingFeed;
+    // isLoadingPage: Updated to include proper guards
+    // - Skip when transitioning to no feeds → go directly to BYOC
+    // - Skip when transitioning between feeds → next feed already cached
+    // - Skip when feed is pending → show pending page directly
+    // - Include isInitiallyLoadingFeeds to prevent GAP (Bug 7)
+    // - Include isAPILoading to prevent BYOC flash (Bug 6)
+    const isLoadingPage = !isOffline &&
+        !isTransitioningToNoFeeds &&
+        !isTransitioningBetweenFeeds &&
+        !isFeedPending &&
+        (isLoadingFeed || isLoadingOnyxValue(personalDetailsMetadata) || !!isAPILoading || isInitiallyLoadingFeeds);
+
+    // showCards: Updated with all necessary guards
+    // - hasAnyFeeds: No feeds means no cards to show
+    // - !isSelectedFeedBeingDeleted: Don't show cards for feed being deleted (prevents ListEmptyComponent skeleton)
+    // - !isLoadingPage: Prevent dual rendering (skeleton AND cards)
+    const showCards = !!hasAnyFeeds &&
+        !isSelectedFeedBeingDeleted &&
+        !isInitiallyLoadingFeeds &&
+        !isFeedPending &&
+        !isNoFeed &&
+        !isLoadingFeed &&
+        !isLoadingPage;
+
     const showTableControls = showCards && !!selectedFeed && !isLoadingCards;
+
+    // Debug logging
+    console.log('[WorkspaceCompanyCardsTable] State:', {
+        hasAnyFeeds,
+        hasSeenFeeds,
+        isSelectedFeedBeingDeleted,
+        isAnyFeedBeingDeleted,
+        isAllFeedsBeingDeleted,
+        isTransitioningToNoFeeds,
+        isTransitioningBetweenFeeds,
+        isConfirmedNoFeeds,
+        isNoFeed,
+        isFeedPending,
+        isLoadingFeed,
+        isLoadingPage,
+        isAPILoading,
+        showCards,
+    });
 
     const isGB = countryByIp === CONST.COUNTRY.GB;
     const shouldShowGBDisclaimer = isGB && (isNoFeed || hasNoAssignedCard);
@@ -274,7 +387,7 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
             {(showCards || isLoadingPage || isFeedPending) && (
                 <View style={shouldUseNarrowTableLayout && styles.mb5}>
                     <WorkspaceCompanyCardsTableHeaderButtons
-                        isLoading={isLoadingPage}
+                        isLoading={isLoadingPage && !isFeedPending && !isNoFeed}
                         policyID={policy?.id}
                         feedName={feedName}
                         showTableControls={showTableControls}
@@ -285,15 +398,18 @@ function WorkspaceCompanyCardsTable({policy, onAssignCard, isAssigningCardDisabl
 
             {(isLoadingPage || isFeedPending || isNoFeed) && (
                 <ScrollView>
-                    {isLoadingPage && <TableRowSkeleton fixedNumItems={5} />}
+                    {/* Priority 1: Show skeleton when loading (but not with pending/empty) */}
+                    {isLoadingPage && !isFeedPending && !isNoFeed && <TableRowSkeleton fixedNumItems={5} />}
 
-                    {isFeedPending && (
+                    {/* Priority 2: Show pending page when feed is pending and not loading */}
+                    {!isLoadingPage && isFeedPending && (
                         <View style={styles.flex1}>
                             <WorkspaceCompanyCardsFeedPendingPage />
                         </View>
                     )}
 
-                    {isNoFeed && (
+                    {/* Priority 3: Show empty state (BYOC) only when confirmed no feed and not loading */}
+                    {!isLoadingPage && !isFeedPending && isNoFeed && (
                         <View style={styles.flex1}>
                             <WorkspaceCompanyCardPageEmptyState
                                 policy={policy}

@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useMemo, useState} from 'react';
 import DecisionModal from '@components/DecisionModal';
 import useAssignCard from '@hooks/useAssignCard';
 import useCardsList from '@hooks/useCardsList';
@@ -37,6 +37,7 @@ function WorkspaceCompanyCardsPage({route}: WorkspaceCompanyCardsPageProps) {
         feedName,
         selectedFeed,
         bankName,
+        isAPILoading,
         onyxMetadata: {allCardFeedsMetadata},
     } = useCompanyCards({policyID});
     const [, cardsListMetadata] = useCardsList(feedName);
@@ -51,20 +52,78 @@ function WorkspaceCompanyCardsPage({route}: WorkspaceCompanyCardsPageProps) {
         onReconnect: () => openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID),
     });
 
-    useEffect(() => {
-        openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID);
-    }, [policyID, domainOrWorkspaceAccountID]);
+    // Detect if any feed is being deleted (optimistic update)
+    const isAnyFeedBeingDeleted = Object.values(allCardFeeds ?? {}).some(
+        (feed) => feed?.pendingAction === CONST.RED_BRICK_ROAD_PENDING_ACTION.DELETE
+    );
 
-    const isLoading = !isOffline && (!allCardFeeds || (isFeedAdded && isLoadingOnyxValue(cardsListMetadata)));
+    // Check if target feed's data is already cached in Onyx
+    // This is the KEY STATE CHECK that prevents unnecessary API calls during feed switching
+    const isTargetFeedAlreadyLoaded = useMemo(() => {
+        if (!allCardFeeds || !domainOrWorkspaceAccountID) {
+            return false;
+        }
+        // Find the feed entry for the current domainOrWorkspaceAccountID
+        const targetFeed = Object.values(allCardFeeds).find(
+            (feed) => feed?.domainID === domainOrWorkspaceAccountID ||
+                      feed?.domainID?.toString() === domainOrWorkspaceAccountID?.toString()
+        );
+        // If feed exists and isn't in a loading state, data is already cached
+        return !!targetFeed && !targetFeed.isLoading;
+    }, [allCardFeeds, domainOrWorkspaceAccountID]);
+
+    // useEffect #1: Skip API call when data is already cached or during deletion
     useEffect(() => {
-        if (isLoading || !bankName || isFeedPending) {
+        console.log('[WorkspaceCompanyCardsPage] useEffect #1 triggered:', {
+            isAnyFeedBeingDeleted,
+            isNoFeed,
+            isTargetFeedAlreadyLoaded,
+            policyID,
+            domainOrWorkspaceAccountID,
+        });
+
+        // Skip during deletion - trust optimistic update, don't trigger loading states
+        if (isAnyFeedBeingDeleted) {
+            console.log('[WorkspaceCompanyCardsPage] useEffect #1: SKIPPING (feed being deleted)');
+            return;
+        }
+        // Skip when no feeds exist - nothing to load
+        if (isNoFeed) {
+            console.log('[WorkspaceCompanyCardsPage] useEffect #1: SKIPPING (no feed)');
+            return;
+        }
+        // CRITICAL: Skip if target feed's data is already in Onyx
+        // This prevents loading flicker when switching between cached feeds
+        if (isTargetFeedAlreadyLoaded) {
+            console.log('[WorkspaceCompanyCardsPage] useEffect #1: SKIPPING (target feed already loaded)');
             return;
         }
 
+        console.log('[WorkspaceCompanyCardsPage] useEffect #1: CALLING openPolicyCompanyCardsPage');
+        openPolicyCompanyCardsPage(policyID, domainOrWorkspaceAccountID);
+    }, [policyID, domainOrWorkspaceAccountID, isAnyFeedBeingDeleted, isNoFeed, isTargetFeedAlreadyLoaded]);
+
+    const isLoading = !isOffline && (!allCardFeeds || (isFeedAdded && isLoadingOnyxValue(cardsListMetadata)));
+
+    // useEffect #2: Add deletion guard
+    useEffect(() => {
+        console.log('[WorkspaceCompanyCardsPage] useEffect #2 triggered:', {
+            isLoading,
+            bankName,
+            isFeedPending,
+            isAnyFeedBeingDeleted,
+        });
+
+        if (isLoading || !bankName || isFeedPending || isAnyFeedBeingDeleted) {
+            console.log('[WorkspaceCompanyCardsPage] useEffect #2: SKIPPING');
+            return;
+        }
+
+        console.log('[WorkspaceCompanyCardsPage] useEffect #2: CALLING openWorkspaceMembersPage and openPolicyCompanyCardsFeed');
         const clientMemberEmails = Object.keys(getMemberAccountIDsForWorkspace(policy?.employeeList));
         openWorkspaceMembersPage(policyID, clientMemberEmails);
         openPolicyCompanyCardsFeed(domainOrWorkspaceAccountID, policyID, bankName);
-    }, [bankName, isLoading, policyID, isFeedPending, domainOrWorkspaceAccountID, policy?.employeeList]);
+    }, [bankName, isLoading, policyID, isFeedPending, domainOrWorkspaceAccountID, policy?.employeeList, isAnyFeedBeingDeleted]);
 
     const {assignCard, isAssigningCardDisabled} = useAssignCard({feedName, policyID, setShouldShowOfflineModal});
 
