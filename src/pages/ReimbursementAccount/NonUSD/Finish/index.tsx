@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useCallback} from 'react';
 import {View} from 'react-native';
 import HeaderWithBackButton from '@components/HeaderWithBackButton';
 import MenuItem from '@components/MenuItem';
@@ -16,7 +16,12 @@ import {navigateToConciergeChat} from '@userActions/Report';
 import ONYXKEYS from '@src/ONYXKEYS';
 import ROUTES from '@src/ROUTES';
 
-function Finish() {
+type FinishProps = {
+    /** Optional override for the back button handler */
+    onBackButtonPress?: () => void;
+};
+
+function Finish({onBackButtonPress}: FinishProps) {
     const styles = useThemeStyles();
     const {translate} = useLocalize();
     const {shouldUseNarrowLayout} = useResponsiveLayout();
@@ -27,9 +32,14 @@ function Finish() {
     const [conciergeReportID] = useOnyx(ONYXKEYS.CONCIERGE_REPORT_ID, {canBeMissing: true});
     const policyID = reimbursementAccount?.achData?.policyID;
 
-    const handleBackButtonPress = () => {
+    const handleBackButtonPress = useCallback(() => {
+        if (onBackButtonPress) {
+            onBackButtonPress();
+            return;
+        }
+
         Navigation.goBack();
-    };
+    }, [onBackButtonPress]);
     const handleNavigateToConciergeChat = () => navigateToConciergeChat(conciergeReportID, true);
 
     return (

@@ -22,6 +22,7 @@ type NonUSDVerifiedBankAccountFlowProps = {
     shouldShowContinueSetupButtonValue: boolean;
     policyCurrency: string;
     isComingFromExpensifyCard?: boolean;
+    onFinishBackButtonPress?: () => void;
 };
 
 function NonUSDVerifiedBankAccountFlow({
@@ -32,6 +33,7 @@ function NonUSDVerifiedBankAccountFlow({
     shouldShowContinueSetupButtonValue,
     policyCurrency,
     isComingFromExpensifyCard,
+    onFinishBackButtonPress,
 }: NonUSDVerifiedBankAccountFlowProps) {
     const styles = useThemeStyles();
     const isDocusignStepRequired = requiresDocusignStep(policyCurrency);
@@ -170,7 +172,7 @@ function NonUSDVerifiedBankAccountFlow({
             );
             break;
         case CONST.NON_USD_BANK_ACCOUNT.STEP.FINISH:
-            CurrentStep = <Finish />;
+            CurrentStep = <Finish onBackButtonPress={onFinishBackButtonPress} />;
             break;
         default:
             CurrentStep = null;

@@ -22,7 +22,8 @@ import usePrevious from '@hooks/usePrevious';
 import useRootNavigationState from '@hooks/useRootNavigationState';
 import useThemeStyles from '@hooks/useThemeStyles';
 import {isCurrencySupportedForECards} from '@libs/CardUtils';
-import Navigation from '@libs/Navigation/Navigation';
+import Navigation, {navigationRef} from '@libs/Navigation/Navigation';
+import getStateFromPath from '@libs/Navigation/helpers/getStateFromPath';
 import type {PlatformStackScreenProps} from '@libs/Navigation/PlatformStackNavigation/types';
 import type {ReimbursementAccountNavigatorParamList} from '@libs/Navigation/types';
 import {goBackFromInvalidPolicy, isPendingDeletePolicy, isPolicyAdmin} from '@libs/PolicyUtils';
@@ -74,6 +75,7 @@ function ReimbursementAccountPage({route, policy, isLoadingPolicy, navigation}: 
     const [onfidoToken = ''] = useOnyx(ONYXKEYS.ONFIDO_TOKEN, {canBeMissing: true});
     const [isLoadingApp = false] = useOnyx(ONYXKEYS.IS_LOADING_APP, {canBeMissing: true});
     const topmostFullScreenRoute = useRootNavigationState((state) => state?.routes.findLast((lastRoute) => isFullScreenName(lastRoute.name)));
+    const isRHPTopmost = useRootNavigationState((state) => state?.routes.at(-1)?.name === NAVIGATORS.RIGHT_MODAL_NAVIGATOR);
 
     const {isBetaEnabled} = usePermissions();
     const policyName = policy?.name ?? '';
@@ -114,6 +116,38 @@ function ReimbursementAccountPage({route, policy, isLoadingPolicy, navigation}: 
     }, []);
 
     const contactMethodRoute = `${environmentURL}/${ROUTES.SETTINGS_CONTACT_METHODS.getRoute(backTo)}`;
+    const defaultBackToRoute = useMemo(
+        () => (policyIDParam ? ROUTES.WORKSPACE_OVERVIEW.getRoute(policyIDParam) : ROUTES.WORKSPACES_LIST.route),
+        [policyIDParam],
+    );
+    const goBackWithFallback = useCallback(() => {
+        if (isRHPTopmost) {
+            Navigation.closeRHPFlow();
+            return;
+        }
+
+        let isBackToValid = false;
+        if (backTo) {
+            try {
+                getStateFromPath(backTo);
+                isBackToValid = true;
+            } catch {
+                isBackToValid = false;
+            }
+        }
+
+        if (isBackToValid && backTo) {
+            Navigation.goBack(backTo);
+            return;
+        }
+
+        if (navigationRef.current?.canGoBack()) {
+            Navigation.goBack();
+            return;
+        }
+
+        Navigation.goBack(defaultBackToRoute);
+    }, [isRHPTopmost, backTo, defaultBackToRoute]);
     const achData = reimbursementAccount?.achData;
     const isPreviousPolicy =
         !!reimbursementAccount && !isLoadingOnyxValue(reimbursementAccountMetadata) ? policyIDParam === achData?.policyID : isLoadingOnyxValue(reimbursementAccountMetadata);
@@ -416,16 +450,24 @@ function ReimbursementAccountPage({route, policy, isLoadingPolicy, navigation}: 
                 if ([CONST.BANK_ACCOUNT.STATE.VERIFYING, CONST.BANK_ACCOUNT.STATE.SETUP].some((value) => value === achData?.state)) {
                     goToWithdrawalAccountSetupStep(CONST.BANK_ACCOUNT.STEP.ACH_CONTRACT);
                 } else if (CONST.BANK_ACCOUNT.STATE.PENDING === achData?.state) {
-                    Navigation.closeRHPFlow();
+                    goBackWithFallback();
                 } else {
-                    Navigation.goBack();
+                    goBackWithFallback();
                 }
                 break;
 
+            case CONST.BANK_ACCOUNT.STEP.ENABLE:
+                goBackWithFallback();
+                break;
+
+            case '':
+                goBackWithFallback();
+                break;
+
             default:
-                Navigation.dismissModal();
+                goBackWithFallback();
         }
-    }, [achData, currentStep, onfidoToken]);
+    }, [achData, currentStep, onfidoToken, goBackWithFallback]);
 
     const isLoading =
         (isLoadingApp || (reimbursementAccount?.isLoading && !reimbursementAccount?.isCreateCorpayBankAccount)) &&
@@ -488,7 +530,7 @@ function ReimbursementAccountPage({route, policy, isLoadingPolicy, navigation}: 
                 <HeaderWithBackButton
                     title={translate('bankAccount.addBankAccount')}
                     subtitle={policyNameToDisplay}
-                    onBackButtonPress={() => Navigation.goBack(backTo)}
+                    onBackButtonPress={goBackWithFallback}
                 />
                 <View style={[styles.m5, styles.mv3, styles.flex1]}>{errorText}</View>
             </ScreenWrapper>
@@ -536,6 +578,7 @@ function ReimbursementAccountPage({route, policy, isLoadingPolicy, navigation}: 
                 isComingFromExpensifyCard={isComingFromExpensifyCard}
                 shouldShowContinueSetupButtonValue={shouldShowContinueSetupButtonValue}
                 policyCurrency={policyCurrency}
+                onFinishBackButtonPress={goBackWithFallback}
             />
         );
     }
@@ -561,6 +604,7 @@ function ReimbursementAccountPage({route, policy, isLoadingPolicy, navigation}: 
             onContinuePress={isNonUSDWorkspace ? continueNonUSDVBBASetup : continueUSDVBBASetup}
             policyName={policyName}
             backTo={backTo}
+            onBackButtonPress={goBackWithFallback}
             shouldShowContinueSetupButton={shouldShowContinueSetupButton}
             isNonUSDWorkspace={isNonUSDWorkspace}
             setNonUSDBankAccountStep={setNonUSDBankAccountStep}

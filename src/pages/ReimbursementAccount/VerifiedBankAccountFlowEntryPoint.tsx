@@ -52,6 +52,9 @@ type VerifiedBankAccountFlowEntryPointProps = {
     /** Back to url passed from page */
     backTo?: Route;
 
+    /** Optional override for the back button handler */
+    onBackButtonPress?: () => void;
+
     /** Should show the continue setup button */
     shouldShowContinueSetupButton: boolean | null;
 
@@ -77,6 +80,7 @@ function VerifiedBankAccountFlowEntryPoint({
     policyName = '',
     policyID = '',
     backTo = '',
+    onBackButtonPress,
     reimbursementAccount,
     onContinuePress,
     shouldShowContinueSetupButton,
@@ -184,6 +188,15 @@ function VerifiedBankAccountFlowEntryPoint({
         prepareNextStep(CONST.BANK_ACCOUNT.SETUP_TYPE.PLAID);
     };
 
+    const handleBackButtonPress = useCallback(() => {
+        if (onBackButtonPress) {
+            onBackButtonPress();
+            return;
+        }
+
+        Navigation.goBack(backTo);
+    }, [onBackButtonPress, backTo]);
+
     return (
         <ScreenWrapper
             includeSafeAreaPaddingBottom={false}
@@ -193,7 +206,7 @@ function VerifiedBankAccountFlowEntryPoint({
             <HeaderWithBackButton
                 title={translate('bankAccount.addBankAccount')}
                 subtitle={policyName}
-                onBackButtonPress={() => Navigation.goBack(backTo)}
+                onBackButtonPress={handleBackButtonPress}
             />
 
             <ScrollView style={styles.flex1}>
