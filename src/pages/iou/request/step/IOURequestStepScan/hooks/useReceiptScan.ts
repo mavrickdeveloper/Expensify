@@ -42,6 +42,7 @@ function useReceiptScan({
     isStartingScan = false,
     updateScanAndNavigate,
     getSource,
+    onAttachmentValidated,
 }: UseReceiptScanParams) {
     const {isBetaEnabled} = usePermissions();
     const [shouldStartLocationPermissionFlow] = useOnyx(ONYXKEYS.NVP_LAST_LOCATION_PERMISSION_PROMPT, {
@@ -227,7 +228,8 @@ function useReceiptScan({
         navigateToConfirmationStep(newReceiptFiles, false);
     }
 
-    const {validateFiles, PDFValidationComponent, ErrorModal} = useFilesValidation((files: FileObject[]) => {
+    const {isValidatingFiles, validateFiles, PDFValidationComponent, ErrorModal} = useFilesValidation((files: FileObject[]) => {
+        onAttachmentValidated?.();
         processReceipts(files, getSource);
     });
     return {
@@ -242,6 +244,7 @@ function useReceiptScan({
         receiptFiles,
         setReceiptFiles,
         navigateToConfirmationStep,
+        isValidatingFiles,
         validateFiles,
         PDFValidationComponent,
         ErrorModal,

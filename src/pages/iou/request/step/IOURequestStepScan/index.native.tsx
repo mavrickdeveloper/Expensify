@@ -12,7 +12,7 @@ import ActivityIndicator from '@components/ActivityIndicator';
 import AttachmentPicker from '@components/AttachmentPicker';
 import Button from '@components/Button';
 import FeatureTrainingModal from '@components/FeatureTrainingModal';
-import {useFullScreenLoaderActions, useFullScreenLoaderState} from '@components/FullScreenLoaderContext';
+import {useFullScreenLoaderActions} from '@components/FullScreenLoaderContext';
 import Icon from '@components/Icon';
 import ImageSVG from '@components/ImageSVG';
 import LocationPermissionModal from '@components/LocationPermissionModal';
@@ -72,7 +72,6 @@ function IOURequestStepScan({
     const styles = useThemeStyles();
     const StyleUtils = useStyleUtils();
     const {translate} = useLocalize();
-    const {isLoaderVisible} = useFullScreenLoaderState();
     const {setIsLoaderVisible} = useFullScreenLoaderActions();
     const {windowWidth, windowHeight} = useWindowDimensions();
     const device = useCameraDevice('back', {
@@ -104,6 +103,7 @@ function IOURequestStepScan({
     const isPlatformMuted = mutedPlatforms[platform];
     const [cameraPermissionStatus, setCameraPermissionStatus] = useState<string | null>(null);
     const [isAttachmentPickerActive, setIsAttachmentPickerActive] = useState(false);
+    const [isAttachmentValidationPending, setIsAttachmentValidationPending] = useState(false);
     const [didCapturePhoto, setDidCapturePhoto] = useState(false);
     const policy = usePolicy(report?.policyID);
 
@@ -115,6 +115,8 @@ function IOURequestStepScan({
 
     // Ref for double-tap protection (doesn't trigger re-render)
     const isCapturingPhoto = useRef(false);
+    // AttachmentPicker stores callbacks in refs, so use a ref to avoid stale validation state in onClosed.
+    const isAttachmentValidationPendingRef = useRef(false);
 
     // Start camera init span when permission is granted and camera is ready
     useEffect(() => {
@@ -236,6 +238,9 @@ function IOURequestStepScan({
         useCallback(() => {
             setDidCapturePhoto(false);
             isCapturingPhoto.current = false;
+            isAttachmentValidationPendingRef.current = false;
+            setIsAttachmentValidationPending(false);
+            setIsAttachmentPickerActive(false);
             const refreshCameraPermissionStatus = () => {
                 CameraPermission?.getCameraPermissionStatus?.()
                     .then(setCameraPermissionStatus)
@@ -257,12 +262,9 @@ function IOURequestStepScan({
                 subscription.remove();
                 cancelSpan(CONST.TELEMETRY.SPAN_RECEIPT_CAPTURE);
                 cancelSpan(CONST.TELEMETRY.SPAN_SHUTTER_TO_CONFIRMATION);
-
-                if (isLoaderVisible) {
-                    setIsLoaderVisible(false);
-                }
+                setIsLoaderVisible(false);
             };
-        }, [isLoaderVisible, setIsLoaderVisible]),
+        }, [setIsLoaderVisible]),
     );
 
     const updateScanAndNavigate = useCallback(
@@ -287,6 +289,17 @@ function IOURequestStepScan({
 
     const getSource = useCallback((file: FileObject) => file.uri ?? '', []);
 
+    const releaseAttachmentPicker = useCallback(() => {
+        setIsAttachmentPickerActive(false);
+        setIsLoaderVisible(false);
+    }, [setIsLoaderVisible]);
+
+    const clearAttachmentPickerState = useCallback(() => {
+        isAttachmentValidationPendingRef.current = false;
+        setIsAttachmentValidationPending(false);
+        releaseAttachmentPicker();
+    }, [releaseAttachmentPicker]);
+
     const {
         isEditing,
         shouldAcceptMultipleFiles,
@@ -296,6 +309,7 @@ function IOURequestStepScan({
         receiptFiles,
         setReceiptFiles,
         navigateToConfirmationStep,
+        isValidatingFiles,
         validateFiles,
         PDFValidationComponent,
         ErrorModal,
@@ -314,6 +328,7 @@ function IOURequestStepScan({
         isStartingScan,
         updateScanAndNavigate,
         getSource,
+        onAttachmentValidated: clearAttachmentPickerState,
     });
 
     const {canUseMultiScan, shouldShowMultiScanEducationalPopup, submitReceipts, submitMultiScanReceipts, toggleMultiScan, dismissMultiScanEducationalPopup, blinkStyle, showBlink} =
@@ -328,6 +343,25 @@ function IOURequestStepScan({
             setStartLocationPermissionFlow,
             setIsMultiScanEnabled,
         });
+
+    const handleAttachmentPicked = useCallback(
+        (files: FileObject[]) => {
+            isAttachmentValidationPendingRef.current = true;
+            setIsAttachmentValidationPending(true);
+            validateFiles(files);
+        },
+        [validateFiles],
+    );
+
+    useEffect(() => {
+        if (!isAttachmentValidationPending || isValidatingFiles) {
+            return;
+        }
+
+        isAttachmentValidationPendingRef.current = false;
+        setIsAttachmentValidationPending(false);
+        releaseAttachmentPicker();
+    }, [isAttachmentValidationPending, isValidatingFiles, releaseAttachmentPicker]);
 
     const maybeCancelShutterSpan = useCallback(() => {
         if (isMultiScanEnabled) {
@@ -591,12 +625,14 @@ function IOURequestStepScan({
                                 style={[styles.alignItemsStart, isMultiScanEnabled && styles.opacity0]}
                                 onPress={() => {
                                     openPicker({
-                                        onPicked: (data) => validateFiles(data),
-                                        onCanceled: () => setIsLoaderVisible(false),
-                                        // makes sure the loader is not visible anymore e.g. when there is an error while uploading a file
+                                        onPicked: handleAttachmentPicked,
+                                        onCanceled: clearAttachmentPickerState,
+                                        // Only clear immediately when the picker flow was canceled or never entered validation.
                                         onClosed: () => {
-                                            setIsAttachmentPickerActive(false);
-                                            setIsLoaderVisible(false);
+                                            if (isAttachmentValidationPendingRef.current) {
+                                                return;
+                                            }
+                                            clearAttachmentPickerState();
                                         },
                                     });
                                 }}

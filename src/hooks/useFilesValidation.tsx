@@ -33,6 +33,7 @@ const sortFilesByOriginalOrder = (files: FileObject[], orderMap: Map<string, num
 };
 
 const isImageFile = (file: FileObject) => hasHeicOrHeifExtension(file) ?? Str.isImage(file.name ?? '');
+const getFileValidationKey = (file: FileObject) => file.uri ?? `${file.name ?? ''}-${file.size ?? 0}-${file.type ?? ''}`;
 
 function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransferItems: DataTransferItem[]) => void) {
     const styles = useThemeStyles();
@@ -56,6 +57,9 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
     const dataTransferItemList = useRef<DataTransferItem[]>([]);
     const collectedErrors = useRef<FileValidationError[]>([]);
     const originalFileOrder = useRef<Map<string, number>>(new Map());
+    const activeValidationSessionID = useRef(0);
+    const expectedPDFCount = useRef(0);
+    const processedPDFKeys = useRef<Set<string>>(new Set());
 
     const updateFileOrderMapping = (oldFile: FileObject | undefined, newFile: FileObject) => {
         const originalIndex = originalFileOrder.current.get(oldFile?.uri ?? '');
@@ -76,22 +80,34 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
         });
     };
 
-    const reset = () => {
-        setIsValidatingFiles(false);
-        setIsValidatingReceipts(undefined);
-        setIsErrorModalVisible(false);
-        setPdfFilesToRender([]);
-        setIsLoaderVisible(false);
-        setValidFilesToUpload([]);
-        setFileError(null);
-        setErrorQueue([]);
-        setCurrentErrorIndex(0);
+    const resetValidationRefs = () => {
         validatedPDFs.current = [];
         validFiles.current = [];
         filesToValidate.current = [];
         dataTransferItemList.current = [];
         collectedErrors.current = [];
         originalFileOrder.current.clear();
+        expectedPDFCount.current = 0;
+        processedPDFKeys.current.clear();
+    };
+
+    const prepareValidationSession = () => {
+        activeValidationSessionID.current += 1;
+        setIsErrorModalVisible(false);
+        setPdfFilesToRender([]);
+        setValidFilesToUpload([]);
+        setFileError(null);
+        setErrorQueue([]);
+        setCurrentErrorIndex(0);
+        resetValidationRefs();
+        return activeValidationSessionID.current;
+    };
+
+    const reset = () => {
+        prepareValidationSession();
+        setIsValidatingFiles(false);
+        setIsValidatingReceipts(undefined);
+        setIsLoaderVisible(false);
     };
 
     const hideModalAndReset = () => {
@@ -107,12 +123,16 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
         setIsErrorModalVisible(true);
     };
 
-    const checkIfAllValidatedAndProceed = () => {
-        if (!validatedPDFs.current || !validFiles.current) {
+    const checkIfAllValidatedAndProceed = (validationSessionID: number) => {
+        if (validationSessionID !== activeValidationSessionID.current) {
             return;
         }
 
-        if (validatedPDFs.current.length !== pdfFilesToRender.length) {
+        if (!validatedPDFs.current || !validFiles.current || expectedPDFCount.current === 0) {
+            return;
+        }
+
+        if (validatedPDFs.current.length !== expectedPDFCount.current) {
             return;
         }
 
@@ -136,7 +156,38 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
         }
     };
 
-    async function validateAndResizeFiles(files: FileObject[], items: DataTransferItem[], validationState: ValidationState) {
+    const handlePDFValidationResult = (file: FileObject, validationSessionID: number, result: 'loadError' | 'loadSuccess' | 'password') => {
+        if (validationSessionID !== activeValidationSessionID.current) {
+            return;
+        }
+
+        const fileValidationKey = getFileValidationKey(file);
+        if (processedPDFKeys.current.has(fileValidationKey)) {
+            return;
+        }
+
+        processedPDFKeys.current.add(fileValidationKey);
+        validatedPDFs.current.push(file);
+
+        if (result === 'loadSuccess') {
+            validFiles.current.push(file);
+        } else if (result === 'password') {
+            if (isValidatingReceipts === true) {
+                collectedErrors.current.push({error: CONST.FILE_VALIDATION_ERRORS.PROTECTED_FILE});
+            } else {
+                validFiles.current.push(file);
+            }
+        } else {
+            collectedErrors.current.push({error: CONST.FILE_VALIDATION_ERRORS.FILE_CORRUPTED});
+        }
+        checkIfAllValidatedAndProceed(validationSessionID);
+    };
+
+    async function validateAndResizeFiles(files: FileObject[], items: DataTransferItem[], validationState: ValidationState, validationSessionID: number) {
+        if (validationSessionID !== activeValidationSessionID.current) {
+            return;
+        }
+
         if (files.length === 0) {
             return;
         }
@@ -185,6 +236,10 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
             }),
         );
 
+        if (validationSessionID !== activeValidationSessionID.current) {
+            return;
+        }
+
         if (filesToConvert.length > 0) {
             setIsLoaderVisible(true);
 
@@ -232,6 +287,10 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
             }
         }
 
+        if (validationSessionID !== activeValidationSessionID.current) {
+            return;
+        }
+
         if (filesToResize.length > 0) {
             setIsLoaderVisible(true);
 
@@ -253,9 +312,14 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
             }
         }
 
+        if (validationSessionID !== activeValidationSessionID.current) {
+            return;
+        }
+
         setIsLoaderVisible(false);
 
         if (pdfsToLoad.length) {
+            expectedPDFCount.current = pdfsToLoad.length;
             validFiles.current = validNonPdfFiles;
             setPdfFilesToRender(pdfsToLoad);
             return;
@@ -297,13 +361,15 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
         setIsValidatingMultipleFiles(validationState.isValidatingMultipleFiles);
 
         if (files.length > CONST.API_ATTACHMENT_VALIDATIONS.MAX_FILE_LIMIT) {
+            prepareValidationSession();
             filesToValidate.current = files.slice(0, CONST.API_ATTACHMENT_VALIDATIONS.MAX_FILE_LIMIT);
             if (items) {
                 dataTransferItemList.current = items.slice(0, CONST.API_ATTACHMENT_VALIDATIONS.MAX_FILE_LIMIT);
             }
             setErrorAndOpenModal(CONST.FILE_VALIDATION_ERRORS.MAX_FILE_LIMIT_EXCEEDED);
         } else {
-            validateAndResizeFiles(files, items ?? [], validationState);
+            const validationSessionID = prepareValidationSession();
+            validateAndResizeFiles(files, items ?? [], validationState, validationSessionID);
         }
     };
 
@@ -314,7 +380,10 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
                 isValidatingReceipts: isValidatingReceipts ?? false,
                 isValidatingMultipleFiles,
             };
-            validateAndResizeFiles(filesToValidate.current, dataTransferItemList.current, validationState);
+            const pendingFilesToValidate = filesToValidate.current;
+            const pendingDataTransferItems = dataTransferItemList.current;
+            const validationSessionID = prepareValidationSession();
+            validateAndResizeFiles(pendingFilesToValidate, pendingDataTransferItems, validationState, validationSessionID);
             return;
         }
 
@@ -351,6 +420,7 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
         }
     };
 
+    const pdfValidationSessionID = activeValidationSessionID.current;
     const PDFValidationComponent = pdfFilesToRender.length
         ? pdfFilesToRender.map((file) => (
               <PDFThumbnail
@@ -358,23 +428,13 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
                   style={styles.invisiblePDF}
                   previewSourceURL={file.uri ?? ''}
                   onLoadSuccess={() => {
-                      validatedPDFs.current.push(file);
-                      validFiles.current.push(file);
-                      checkIfAllValidatedAndProceed();
+                      handlePDFValidationResult(file, pdfValidationSessionID, 'loadSuccess');
                   }}
                   onPassword={() => {
-                      validatedPDFs.current.push(file);
-                      if (isValidatingReceipts === true) {
-                          collectedErrors.current.push({error: CONST.FILE_VALIDATION_ERRORS.PROTECTED_FILE});
-                      } else {
-                          validFiles.current.push(file);
-                      }
-                      checkIfAllValidatedAndProceed();
+                      handlePDFValidationResult(file, pdfValidationSessionID, 'password');
                   }}
                   onLoadError={() => {
-                      validatedPDFs.current.push(file);
-                      collectedErrors.current.push({error: CONST.FILE_VALIDATION_ERRORS.FILE_CORRUPTED});
-                      checkIfAllValidatedAndProceed();
+                      handlePDFValidationResult(file, pdfValidationSessionID, 'loadError');
                   }}
               />
           ))
@@ -412,6 +472,7 @@ function useFilesValidation(onFilesValidated: (files: FileObject[], dataTransfer
     );
 
     return {
+        isValidatingFiles,
         PDFValidationComponent,
         validateFiles,
         ErrorModal,

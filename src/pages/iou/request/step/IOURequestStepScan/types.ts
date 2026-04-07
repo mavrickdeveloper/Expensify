@@ -49,6 +49,9 @@ type UseReceiptScanParams = {
 
     /** Returns a source URL for the file based on platform */
     getSource: (file: FileObject) => string;
+
+    /** Called when attachment validation succeeds and the flow is handing off to receipt processing */
+    onAttachmentValidated?: () => void;
 };
 
 type UseMobileReceiptScanParams = {
