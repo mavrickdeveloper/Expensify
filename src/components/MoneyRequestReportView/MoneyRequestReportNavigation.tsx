@@ -1,4 +1,4 @@
-import React, {useEffect} from 'react';
+import React, {useEffect, useState} from 'react';
 import {View} from 'react-native';
 import PrevNextButtons from '@components/PrevNextButtons';
 import Text from '@components/Text';
@@ -16,16 +16,44 @@ type MoneyRequestReportNavigationProps = {
 
 function MoneyRequestReportNavigation({reportID, shouldDisplayNarrowVersion}: MoneyRequestReportNavigationProps) {
     const {allReports, isSearchLoading, lastSearchQuery} = useSearchSections();
+    const [lastStableAllReports, setLastStableAllReports] = useState<Array<string | undefined>>([]);
 
     const type = lastSearchQuery?.queryJSON?.type;
     const currentIndex = allReports.indexOf(reportID);
-    const allReportsCount = lastSearchQuery?.previousLengthOfResults ?? 0;
+    // Preserve the last valid report list while search recount is reconciling.
+    const shouldUseFallbackReports =
+        !!reportID &&
+        !!lastSearchQuery?.allowPostSearchRecount &&
+        lastStableAllReports.length > 1 &&
+        lastStableAllReports.includes(reportID) &&
+        (currentIndex === -1 || allReports.length <= 1);
+    const effectiveAllReports = shouldUseFallbackReports ? lastStableAllReports : allReports;
+    const effectiveCurrentIndex = effectiveAllReports.indexOf(reportID);
+    const effectiveAllReportsLength = effectiveAllReports.length;
+    const allReportsCount = lastSearchQuery?.previousLengthOfResults ?? effectiveAllReportsLength;
 
-    const hideNextButton = !lastSearchQuery?.hasMoreResults && currentIndex === allReports.length - 1;
-    const hidePrevButton = currentIndex === 0;
+    const hideNextButton = !lastSearchQuery?.hasMoreResults && effectiveCurrentIndex === effectiveAllReportsLength - 1;
+    const hidePrevButton = effectiveCurrentIndex === 0;
     const styles = useThemeStyles();
     const isExpenseReportSearch = type === CONST.SEARCH.DATA_TYPES.EXPENSE_REPORT;
-    const shouldDisplayNavigationArrows = isExpenseReportSearch && allReports && allReports.length > 1 && currentIndex !== -1 && !!lastSearchQuery?.queryJSON;
+    const shouldDisplayNavigationArrows = isExpenseReportSearch && effectiveAllReportsLength > 1 && effectiveCurrentIndex !== -1 && !!lastSearchQuery?.queryJSON;
+
+    useEffect(() => {
+        if (currentIndex === -1 || allReports.length <= 1) {
+            return;
+        }
+
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setLastStableAllReports((previousReports) => {
+            const isUnchanged = previousReports.length === allReports.length && previousReports.every((report, index) => report === allReports.at(index));
+
+            if (isUnchanged) {
+                return previousReports;
+            }
+
+            return [...allReports];
+        });
+    }, [allReports, currentIndex]);
 
     useEffect(() => {
         if (!lastSearchQuery?.queryJSON) {
@@ -36,29 +64,29 @@ function MoneyRequestReportNavigation({reportID, shouldDisplayNarrowVersion}: Mo
             saveLastSearchParams({
                 ...lastSearchQuery,
                 allowPostSearchRecount: false,
-                previousLengthOfResults: allReports.length,
+                previousLengthOfResults: effectiveAllReportsLength,
             });
             return;
         }
 
         // Update count when reports are added or removed (e.g., created offline)
-        if (allReports.length !== allReportsCount) {
+        if (effectiveAllReportsLength !== allReportsCount) {
             saveLastSearchParams({
                 ...lastSearchQuery,
-                previousLengthOfResults: allReports.length,
+                previousLengthOfResults: effectiveAllReportsLength,
             });
             return;
         }
 
-        if (currentIndex < allReportsCount - 1) {
+        if (effectiveCurrentIndex < allReportsCount - 1) {
             return;
         }
 
         saveLastSearchParams({
             ...lastSearchQuery,
-            previousLengthOfResults: allReports.length,
+            previousLengthOfResults: effectiveAllReportsLength,
         });
-    }, [currentIndex, allReportsCount, allReports.length, lastSearchQuery?.queryJSON, lastSearchQuery]);
+    }, [effectiveCurrentIndex, allReportsCount, effectiveAllReportsLength, lastSearchQuery?.queryJSON, lastSearchQuery]);
 
     const goToReportId = (reportId?: string) => {
         if (!reportId) {
@@ -70,40 +98,40 @@ function MoneyRequestReportNavigation({reportID, shouldDisplayNarrowVersion}: Mo
     };
 
     const goToNextReport = () => {
-        if (currentIndex === -1 || allReports.length === 0 || !lastSearchQuery?.queryJSON) {
+        if (effectiveCurrentIndex === -1 || effectiveAllReportsLength === 0 || !lastSearchQuery?.queryJSON) {
             return;
         }
-        const threshold = Math.min(allReports.length * 0.75, allReports.length - 2);
+        const threshold = Math.min(effectiveAllReportsLength * 0.75, effectiveAllReportsLength - 2);
 
-        if (currentIndex + 1 >= threshold && lastSearchQuery?.hasMoreResults) {
+        if (effectiveCurrentIndex + 1 >= threshold && lastSearchQuery?.hasMoreResults) {
             const newOffset = (lastSearchQuery.offset ?? 0) + CONST.SEARCH.RESULTS_PAGE_SIZE;
             search({
                 queryJSON: lastSearchQuery.queryJSON,
                 offset: newOffset,
-                prevReportsLength: allReports.length,
+                prevReportsLength: effectiveAllReportsLength,
                 shouldCalculateTotals: false,
                 searchKey: lastSearchQuery.searchKey,
                 isLoading: isSearchLoading,
             });
         }
 
-        const nextIndex = (currentIndex + 1) % allReports.length;
-        goToReportId(allReports.at(nextIndex));
+        const nextIndex = (effectiveCurrentIndex + 1) % effectiveAllReportsLength;
+        goToReportId(effectiveAllReports.at(nextIndex));
     };
 
     const goToPrevReport = () => {
-        if (currentIndex === -1 || allReports.length === 0) {
+        if (effectiveCurrentIndex === -1 || effectiveAllReportsLength === 0) {
             return;
         }
 
-        const prevIndex = (currentIndex - 1) % allReports.length;
-        goToReportId(allReports.at(prevIndex));
+        const prevIndex = (effectiveCurrentIndex - 1) % effectiveAllReportsLength;
+        goToReportId(effectiveAllReports.at(prevIndex));
     };
 
     return (
         shouldDisplayNavigationArrows && (
             <View style={[styles.flexRow, styles.alignItemsCenter, styles.gap2]}>
-                {!shouldDisplayNarrowVersion && <Text style={styles.mutedTextLabel}>{`${currentIndex + 1} of ${allReportsCount}`}</Text>}
+                {!shouldDisplayNarrowVersion && <Text style={styles.mutedTextLabel}>{`${effectiveCurrentIndex + 1} of ${allReportsCount}`}</Text>}
                 <PrevNextButtons
                     isPrevButtonDisabled={hidePrevButton}
                     isNextButtonDisabled={hideNextButton}
