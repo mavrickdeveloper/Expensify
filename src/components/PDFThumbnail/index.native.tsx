@@ -46,9 +46,6 @@ function PDFThumbnail({previewSourceURL, style, enabled = true, fitPolicy = 0, o
                             setFailedToLoad(true);
                         }}
                         onLoadComplete={reportLoadSuccess}
-                        // Android sometimes renders hidden validation PDFs without emitting onLoadComplete.
-                        // pageChanged still confirms PdfView decoded a page, so use it as a success fallback.
-                        onPageChanged={reportLoadSuccess}
                     />
                 )}
                 {failedToLoad && <PDFThumbnailError />}
