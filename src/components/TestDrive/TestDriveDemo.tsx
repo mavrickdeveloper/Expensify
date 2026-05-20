@@ -8,6 +8,7 @@ import EmbeddedDemo from '@components/EmbeddedDemo';
 import Modal from '@components/Modal';
 import SafeAreaConsumer from '@components/SafeAreaConsumer';
 import {shouldOpenRHPVariant} from '@components/SidePanel/RHPVariantTest';
+import useActivePolicy from '@hooks/useActivePolicy';
 import useCurrentUserPersonalDetails from '@hooks/useCurrentUserPersonalDetails';
 import useIsPaidPolicyAdmin from '@hooks/useIsPaidPolicyAdmin';
 import useOnboardingMessages from '@hooks/useOnboardingMessages';
@@ -33,11 +34,14 @@ function TestDriveDemo() {
     const [isVisible, setIsVisible] = useState(false);
     const styles = useThemeStyles();
     const [onboarding] = useOnyx(ONYXKEYS.NVP_ONBOARDING);
-    const [onboardingReport] = useOnyx(`${ONYXKEYS.COLLECTION.REPORT}${onboarding?.chatReportID}`);
+    const onboardingChatReportID = onboarding?.chatReportID;
+    const [onboardingReport] = useOnyx(`${ONYXKEYS.COLLECTION.REPORT}${onboardingChatReportID}`);
     const [introSelected] = useOnyx(ONYXKEYS.NVP_INTRO_SELECTED);
     const [conciergeReportID] = useOnyx(ONYXKEYS.CONCIERGE_REPORT_ID);
     const [betas] = useOnyx(ONYXKEYS.BETAS);
     const [delegateEmail] = useOnyx(ONYXKEYS.ACCOUNT, {selector: delegateEmailSelector});
+    const activePolicy = useActivePolicy();
+    const activePolicyAdminsChatReportID = activePolicy?.chatReportIDAdmins?.toString();
     const {
         taskReport: viewTourTaskReport,
         taskParentReport: viewTourTaskParentReport,
@@ -110,11 +114,17 @@ function TestDriveDemo() {
                 Log.hmmm('[AdminTestDriveModal] User was redirected to Workspace Editor, skipping navigation to admin room');
                 return;
             }
-            if (isAdminRoom(onboardingReport)) {
-                Navigation.navigate(ROUTES.REPORT_WITH_ID.getRoute(onboardingReport?.reportID));
+
+            const onboardingAdminReportID = isAdminRoom(onboardingReport) ? onboardingReport?.reportID : undefined;
+            const shouldFallbackToActivePolicyAdminsRoom =
+                !onboardingReport && !!activePolicyAdminsChatReportID && (!onboardingChatReportID || onboardingChatReportID === activePolicyAdminsChatReportID);
+            const adminsRoomReportID = onboardingAdminReportID ?? (shouldFallbackToActivePolicyAdminsRoom ? activePolicyAdminsChatReportID : undefined);
+
+            if (adminsRoomReportID) {
+                Navigation.navigate(ROUTES.REPORT_WITH_ID.getRoute(adminsRoomReportID));
             }
         });
-    }, [onboardingReport]);
+    }, [activePolicyAdminsChatReportID, onboardingChatReportID, onboardingReport]);
 
     return (
         <SafeAreaConsumer>
